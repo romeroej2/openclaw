@@ -31,8 +31,76 @@ INPUT_PATHS=(
   "$A2UI_APP_DIR"
 )
 
+resolve_node_bin() {
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+
+  if command -v node.exe >/dev/null 2>&1; then
+    command -v node.exe
+    return 0
+  fi
+
+  if command -v where.exe >/dev/null 2>&1; then
+    while IFS= read -r windows_path; do
+      windows_path="${windows_path//$'\r'/}"
+      [[ -z "$windows_path" ]] && continue
+
+      if command -v cygpath >/dev/null 2>&1; then
+        candidate="$(cygpath -u "$windows_path" 2>/dev/null || true)"
+      else
+        candidate="$windows_path"
+      fi
+
+      if [[ -n "$candidate" && -x "$candidate" ]]; then
+        echo "$candidate"
+        return 0
+      fi
+    done < <(where.exe node 2>/dev/null || true)
+  fi
+
+  return 1
+}
+
+NODE_BIN="$(resolve_node_bin || true)"
+if [[ -z "$NODE_BIN" ]]; then
+  echo "node executable not found in PATH (bash)." >&2
+  echo "On Windows, ensure Node is installed and accessible to your bash shell." >&2
+  exit 1
+fi
+
+NODE_USES_WINDOWS_PATHS=0
+if [[ "$NODE_BIN" == *.exe ]]; then
+  NODE_USES_WINDOWS_PATHS=1
+fi
+
+to_node_path() {
+  local p="$1"
+  if [[ "$NODE_USES_WINDOWS_PATHS" -eq 1 ]]; then
+    if command -v wslpath >/dev/null 2>&1; then
+      wslpath -w "$p"
+      return 0
+    fi
+    if command -v cygpath >/dev/null 2>&1; then
+      cygpath -w "$p"
+      return 0
+    fi
+  fi
+  echo "$p"
+}
+
 compute_hash() {
-  ROOT_DIR="$ROOT_DIR" node --input-type=module - "${INPUT_PATHS[@]}" <<'NODE'
+  local root_dir_for_node
+  root_dir_for_node="$(to_node_path "$ROOT_DIR")"
+
+  local input_paths_for_node=()
+  local input_path
+  for input_path in "${INPUT_PATHS[@]}"; do
+    input_paths_for_node+=("$(to_node_path "$input_path")")
+  done
+
+  ROOT_DIR="$root_dir_for_node" "$NODE_BIN" --input-type=module - "${input_paths_for_node[@]}" <<'NODE'
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
